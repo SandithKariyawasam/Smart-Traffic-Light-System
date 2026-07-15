@@ -21,6 +21,7 @@ cars-own [
   max-speed
   current-road
   turn-intention ;; "straight", "left", "right"
+  is-emergency?
 ]
 
 patches-own [
@@ -184,6 +185,25 @@ end
 to update-lights
   set phase-timer phase-timer + 1
   
+  ;; Emergency vehicle override logic
+  let emergency-dir "NONE"
+  if emergency-vehicles? [
+    let approaching-evs cars with [is-emergency? and (distancexy 0.5 0.5 < 15)]
+    if any? approaching-evs [
+      let closest-ev min-one-of approaching-evs [distancexy 0.5 0.5]
+      let dir [current-road] of closest-ev
+      let heading-towards? false
+      if dir = "N" and [ycor] of closest-ev < 0 [ set heading-towards? true ]
+      if dir = "S" and [ycor] of closest-ev > 1 [ set heading-towards? true ]
+      if dir = "E" and [xcor] of closest-ev < 0 [ set heading-towards? true ]
+      if dir = "W" and [xcor] of closest-ev > 1 [ set heading-towards? true ]
+      
+      if heading-towards? [
+         set emergency-dir dir
+      ]
+    ]
+  ]
+
   let cars-waiting-N count cars with [current-road = "N" and ycor < -2]
   let cars-waiting-S count cars with [current-road = "S" and ycor > 3]
   let cars-waiting-E count cars with [current-road = "E" and xcor < -2]
@@ -201,11 +221,23 @@ to update-lights
   
   ifelse is-green-phase? [
     let switch? false
-    if phase-timer >= 30 and current-waiting = 0 and total-others-waiting > 0 [
-      set switch? true
+    
+    if emergency-dir != "NONE" [
+      let ev-phase (word emergency-dir "-green")
+      ifelse current-phase = ev-phase [
+         set phase-timer 0 ;; hold green
+      ] [
+         set switch? true ;; force switch to let ev through
+      ]
     ]
-    if phase-timer >= max-green and total-others-waiting > 0 [
-      set switch? true
+    
+    if emergency-dir = "NONE" [
+      if phase-timer >= 30 and current-waiting = 0 and total-others-waiting > 0 [
+        set switch? true
+      ]
+      if phase-timer >= max-green and total-others-waiting > 0 [
+        set switch? true
+      ]
     ]
     
     if switch? [
@@ -221,30 +253,34 @@ to update-lights
     
     ;; Wait for at least 7 ticks AND for the intersection to be clear. Force switch after 30 ticks just in case.
     if phase-timer >= 7 and (intersection-clear? or phase-timer > 30) [
-      let demand-N cars-waiting-N
-      let demand-S cars-waiting-S
-      let demand-E cars-waiting-E
-      let demand-W cars-waiting-W
-      
-      if current-phase = "N-yellow" [ set demand-N -1 ]
-      if current-phase = "S-yellow" [ set demand-S -1 ]
-      if current-phase = "E-yellow" [ set demand-E -1 ]
-      if current-phase = "W-yellow" [ set demand-W -1 ]
-      
-      let max-other max (list demand-N demand-S demand-E demand-W)
-      
-      ifelse max-other > 0 [
-        let picked? false
-        if max-other = demand-N and not picked? [ set current-phase "N-green" set picked? true ]
-        if max-other = demand-S and not picked? [ set current-phase "S-green" set picked? true ]
-        if max-other = demand-E and not picked? [ set current-phase "E-green" set picked? true ]
-        if max-other = demand-W and not picked? [ set current-phase "W-green" set picked? true ]
+      ifelse emergency-dir != "NONE" [
+         set current-phase (word emergency-dir "-green")
       ] [
-        let picked? false
-        if current-phase = "N-yellow" and not picked? [ set current-phase "S-green" set picked? true ]
-        if current-phase = "S-yellow" and not picked? [ set current-phase "E-green" set picked? true ]
-        if current-phase = "E-yellow" and not picked? [ set current-phase "W-green" set picked? true ]
-        if current-phase = "W-yellow" and not picked? [ set current-phase "N-green" set picked? true ]
+        let demand-N cars-waiting-N
+        let demand-S cars-waiting-S
+        let demand-E cars-waiting-E
+        let demand-W cars-waiting-W
+        
+        if current-phase = "N-yellow" [ set demand-N -1 ]
+        if current-phase = "S-yellow" [ set demand-S -1 ]
+        if current-phase = "E-yellow" [ set demand-E -1 ]
+        if current-phase = "W-yellow" [ set demand-W -1 ]
+        
+        let max-other max (list demand-N demand-S demand-E demand-W)
+        
+        ifelse max-other > 0 [
+          let picked? false
+          if max-other = demand-N and not picked? [ set current-phase "N-green" set picked? true ]
+          if max-other = demand-S and not picked? [ set current-phase "S-green" set picked? true ]
+          if max-other = demand-E and not picked? [ set current-phase "E-green" set picked? true ]
+          if max-other = demand-W and not picked? [ set current-phase "W-green" set picked? true ]
+        ] [
+          let picked? false
+          if current-phase = "N-yellow" and not picked? [ set current-phase "S-green" set picked? true ]
+          if current-phase = "S-yellow" and not picked? [ set current-phase "E-green" set picked? true ]
+          if current-phase = "E-yellow" and not picked? [ set current-phase "W-green" set picked? true ]
+          if current-phase = "W-yellow" and not picked? [ set current-phase "N-green" set picked? true ]
+        ]
       ]
       set phase-timer 0
     ]
@@ -311,12 +347,19 @@ to spawn-vehicles
         ask spawn-patch [
           sprout-cars 1 [
             set shape "car"
-            set color one-of [blue red green yellow white black]
             set size 1.5
             set speed 0.5
             set max-speed 1.0
             set current-road dir
             set turn-intention intention
+            set is-emergency? false
+            set color one-of [blue brown]
+            
+            if emergency-vehicles? and random 100 < 2 [
+              set is-emergency? true
+              set color white
+              set max-speed 1.5
+            ]
             
             if current-road = "E" [ set heading 90 ]
             if current-road = "W" [ set heading 270 ]
@@ -400,7 +443,7 @@ end
     <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="-17" height="714" showTickCounter="true" patchSize="20.0" fontSize="10" wrappingAllowedY="true" width="714" tickCounterLabel="ticks" maxPycor="17" updateMode="0" maxPxcor="17" minPxcor="-17"></view>
     <button x="40" y="45" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
     <button x="105" y="45" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="55">go</button>
-    <slider x="40" step="1" y="95" max="20" width="250" display="traffic-density" height="50" min="1" direction="Horizontal" default="5.0" variable="traffic-density"></slider>
+    <slider x="40" step="1" y="95" max="20" width="250" display="traffic-density" height="50" min="1" direction="Horizontal" default="20.0" variable="traffic-density"></slider>
     <slider x="40" step="1" y="150" max="30" width="250" display="min-green" height="50" min="5" direction="Horizontal" default="10.0" variable="min-green"></slider>
     <slider x="40" step="1" y="205" max="120" width="250" display="max-green" height="50" min="30" direction="Horizontal" default="60.0" variable="max-green"></slider>
     <slider x="40" step="1" y="260" max="10" width="250" display="switching-threshold" height="50" min="1" direction="Horizontal" default="3.0" variable="switching-threshold"></slider>
