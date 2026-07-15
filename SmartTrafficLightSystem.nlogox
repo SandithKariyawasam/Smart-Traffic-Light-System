@@ -1,515 +1,99 @@
 <?xml version="1.0" encoding="utf-8"?>
 <model version="NetLogo 7.0.4" snapToGrid="true">
-  <code><![CDATA[;; ============================================================================
-;; SMART ADAPTIVE TRAFFIC LIGHT CONTROL SYSTEM (SATLCS)
-;; Group Assignment - Agent-Based Systems (SE404.3)
-;; ============================================================================
-
-;; --- GLOBAL VARIABLES ---
+  <code><![CDATA[
 globals [
-  average-waiting-time   ;; Performance measure: Avg ticks vehicles spend stopped
-  total-throughput       ;; Performance measure: Total cars that exited the network
-  total-waiting-time     ;; Cumulative waiting time of all vehicles
-  completed-trips        ;; Count of vehicles that successfully reached an exit
+  ;; UI variables will be used later
 ]
 
-;; --- BREED DEFINITIONS & ATTRIBUTES ---
-;; Section 4.1 & 4.2 of Report: Agent Identification
-breed [ lights light ]
 breed [ cars car ]
-breed [ emergencies emergency ]
+breed [ lights light ]
 breed [ visual-lights visual-light ]
 
-visual-lights-own [ light-type light-dir parent-light ]
+visual-lights-own [ light-dir parent-light ]
 
-;; Traffic-Light Agent Attributes
 lights-own [
-  current-phase          ;; "NS-green", "EW-green", or "Pedestrian-walk"
-  phase-timer            ;; Elapsed ticks in the current phase (FSM state tracking)
-  queue-ns               ;; Sensed count of vehicles waiting North-South
-  queue-ew               ;; Sensed count of vehicles waiting East-West
-  neighbour-congestion   ;; Broadcasted congestion level from adjacent intersections
-  emergency-detected?    ;; Boolean flag: True if siren detected within radius
+  current-phase
+  phase-timer
 ]
 
-;; Vehicle (Car) Agent Attributes
 cars-own [
-  speed                  ;; Current speed (patches per tick)
-  max-speed              ;; Top speed allowed
-  waiting-time           ;; Ticks spent stopped (speed = 0)
-  stopped?               ;; Boolean flag: True if waiting at a light or traffic
-  current-road           ;; Direction of current road ("N", "S", "E", "W")
-  destination            ;; Target exit boundary
-  patience               ;; Ticks before attempting to reroute around congestion
+  speed
+  max-speed
+  current-road
+  turn-intention ;; "straight", "left", "right"
 ]
 
-;; Emergency Vehicle Attributes
-emergencies-own [
-  speed                  ;; Current speed (higher max-speed than cars)
-  siren-active?          ;; Boolean flag: Alerts traffic lights and cars
-  waiting-time           ;; Tracked to ensure near-zero delay goal
-]
-
-;; Environment Patch Attributes (Section 5.1 of Report)
 patches-own [
-  road?                  ;; True if patch is drivable
-  intersection?          ;; True if patch is a signalised junction
-  crossing?              ;; True if patch is a pedestrian crossing
-  road-dir               ;; Direction of traffic: "N", "S", "E", "W", or "NONE"
-  congestion-level       ;; Sensed vehicle count on this road segment
+  road?
+  intersection?
+  road-dir
 ]
-
-;; ============================================================================
-;; 1. SETUP PROCEDURES (Member 1 & Member 2)
-;; ============================================================================
 
 to setup
   clear-all
-  reset-ticks
-  
-  ;; Initialize global performance measures
-  set total-waiting-time 0
-  set completed-trips 0
-  set average-waiting-time 0
-  set total-throughput 0
-  
-  ;; Setup environment structure
   setup-environment
-  
-  ;; Place Traffic Light agents at intersections
-  setup-traffic-lights
-  
-  ;; Initial population of vehicles and pedestrians
-  spawn-vehicles
-  
   reset-ticks
 end
 
 to setup-environment
-  ;; Set default background to building/non-road (Black)
   ask patches [
     set road? false
     set intersection? false
-    set crossing? false
     set road-dir "NONE"
     set pcolor black
-    set congestion-level 0
   ]
   
-  ;; Create a single central cross intersection (Grey patches)
-  ;; Horizontal road (East-West)
-  ask patches with [ pycor >= -1 and pycor <= 2 ] [
+  ;; Vertical Road (North-South)
+  ask patches with [pxcor >= -1 and pxcor <= 2] [
     set road? true
     set pcolor gray
-    ifelse (pycor >= 1) [ set road-dir "E" ] [ set road-dir "W" ]
+    ifelse pxcor < 1 [ set road-dir "S" ] [ set road-dir "N" ]
   ]
   
-  ;; Vertical road (North-South)
-  ask patches with [ pxcor >= -1 and pxcor <= 2 ] [
+  ;; Horizontal Road (East-West)
+  ask patches with [pycor >= -1 and pycor <= 2] [
     set road? true
     set pcolor gray
-    ifelse (pxcor <= 0) [ set road-dir "N" ] [ set road-dir "S" ]
+    ifelse pycor > 0 [ set road-dir "W" ] [ set road-dir "E" ]
   ]
   
-  ;; Mark Intersections (where horizontal and vertical roads cross)
-  ask patches with [ road? and (pxcor >= -1 and pxcor <= 2) 
-                           and (pycor >= -1 and pycor <= 2) ] [
+  ;; Intersection
+  ask patches with [road? and (pxcor >= -1 and pxcor <= 2) and (pycor >= -1 and pycor <= 2)] [
     set intersection? true
     set road-dir "INTERSECTION"
-    set pcolor gray
   ]
   
-  ;; Mark Pedestrian Crossings adjacent to intersections
-  ask patches with [ road? and not intersection? and 
-                     (any? neighbors with [intersection?]) ] [
-    set crossing? true
-    set pcolor gray
-  ]
+  draw-road-lines
   
-  ;; Draw advanced UI (lane markings, stop lines, zebra crossings)
-  draw-advanced-ui
-end
-
-to setup-traffic-lights
-  ;; Create 1 traffic light agent at the center of the main intersection
-  foreach [ [0.5 0.5] ] [ coords ->
-    create-lights 1 [
-      setxy item 0 coords item 1 coords
-      set hidden? true
-      set current-phase "NS-green"
-      set phase-timer 0
-      set queue-ns 0
-      set queue-ew 0
-      set neighbour-congestion 0
-      set emergency-detected? false
-      
-      let self-light self
-      let cx item 0 coords
-      let cy item 1 coords
-      
-      ;; North approach (S bound)
-      hatch-visual-lights 1 [ setxy (cx + 0.5) (cy + 3.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "S" set hidden? false set parent-light self-light ]
-      hatch-visual-lights 1 [ setxy (cx + 1.5) (cy + 3.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "S" set hidden? false set parent-light self-light ]
-      
-      ;; South approach (N bound)
-      hatch-visual-lights 1 [ setxy (cx - 0.5) (cy - 3.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "N" set hidden? false set parent-light self-light ]
-      hatch-visual-lights 1 [ setxy (cx - 1.5) (cy - 3.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "N" set hidden? false set parent-light self-light ]
-      
-      ;; East approach (W bound)
-      hatch-visual-lights 1 [ setxy (cx + 3.5) (cy - 0.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "W" set hidden? false set parent-light self-light ]
-      hatch-visual-lights 1 [ setxy (cx + 3.5) (cy - 1.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "W" set hidden? false set parent-light self-light ]
-      
-      ;; West approach (E bound)
-      hatch-visual-lights 1 [ setxy (cx - 3.5) (cy + 0.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "E" set hidden? false set parent-light self-light ]
-      hatch-visual-lights 1 [ setxy (cx - 3.5) (cy + 1.5) set shape "square" set size 1 set light-type "vehicle" set light-dir "E" set hidden? false set parent-light self-light ]
-      
-      update-signal-visuals
-    ]
-  ]
-end
-
-;; ============================================================================
-;; 2. MAIN SIMULATION LOOP (THE GO PROCEDURE)
-;; ============================================================================
-
-to go
-  ;; 1. Spawn new agents stochastically at boundaries
-  if random 100 < traffic-density [ spawn-vehicles ]
-  if emergency-vehicles? and random 500 < 5 [ spawn-emergency ]
-  
-  ;; 2. Agent-Environment Loop: Traffic Lights (Primary Agent)
-  ask lights [
-    perceive-environment   ;; Step 1: Sense queues and sirens
-    decide-light-action    ;; Step 2 & 3: Evaluate rules and act (Hybrid Arch)
-    update-signal-visuals  ;; Step 4: Alter environment state (patch colors)
-  ]
-  
-  ;; 3. Agent-Environment Loop: Emergency Vehicles (Priority Movement)
-  ask emergencies [
-    move-emergency
-  ]
-  
-  ;; 4. Agent-Environment Loop: Normal Vehicles
-  ask cars [
-    perceive-and-move
-    check-exit
-  ]
-  
-  ;; 5. Update data collection and system measures
-  update-metrics
-  
-  tick
-end
-
-;; ============================================================================
-;; 3. TRAFFIC LIGHT AGENT LOGIC (HYBRID ARCHITECTURE)
-;; Section 6.1 & 8.1 of Report: Member 2
-;; ============================================================================
-
-to perceive-environment
-  ;; SENSORS: Count vehicles stopped within detection radius (e.g., 8 patches)
-  set queue-ns count cars in-radius 8 with [ (current-road = "N" or current-road = "S") and stopped? ]
-  set queue-ew count cars in-radius 8 with [ (current-road = "E" or current-road = "W") and stopped? ]
-  
-  ;; Sensor: Check for emergency siren within detection radius
-  set emergency-detected? any? emergencies in-radius 10
-  
-  ;; Sensor: Read neighbour congestion (for Coordinated mode)
-  if control-mode = "Coordinated" [
-    let my-neighbours other lights in-radius 25
-    if any? my-neighbours [
-      set neighbour-congestion mean [queue-ns + queue-ew] of my-neighbours
-    ]
-  ]
-end
-
-to decide-light-action
-  set phase-timer phase-timer + 1
-  
-  ;; --- CONTROL LAYER: FIXED MODE ---
-  if control-mode = "Fixed" [
-    if phase-timer >= max-green [ switch-phase ]
-    stop
-  ]
-  
-  ;; --- HYBRID ARCHITECTURE (ADAPTIVE & COORDINATED MODES) ---
-  ;; Priority 1: REACTIVE LAYER - Emergency Pre-emption
-  if emergency-detected? [
-    let approaching-em one-of emergencies in-radius 10
-    if approaching-em != nobody [
-      ;; Force green in the direction of the emergency vehicle
-      let em-dir [current-road] of approaching-em
-      if (em-dir = "N" or em-dir = "S") and current-phase != "NS-green" [ switch-to "NS-green" ]
-      if (em-dir = "E" or em-dir = "W") and current-phase != "EW-green" [ switch-to "EW-green" ]
-      stop
-    ]
-  ]
-  
-  ;; Priority 2: REACTIVE LAYER - Minimum Green Safety Constraint
-  if phase-timer < min-green [
-    stop ;; Hold phase, no switching allowed
-  ]
-  
-  ;; Priority 3: REACTIVE LAYER - Maximum Green Starvation Prevention
-  if phase-timer >= max-green [
-    switch-phase
-    stop
-  ]
-  
-  ;; Priority 5: DELIBERATIVE LAYER - Queue Optimization Rule
-  ;; Switch if the red approach queue exceeds green approach by switching-threshold
-  if current-phase = "NS-green" and (queue-ew > (queue-ns + switching-threshold)) [
-    ;; In Coordinated mode, verify downstream EW is not heavily congested (Priority 6)
-    if not (control-mode = "Coordinated" and neighbour-congestion > 10) [
-      switch-phase
-      stop
-    ]
-  ]
-  
-  if current-phase = "EW-green" and (queue-ns > (queue-ew + switching-threshold)) [
-    if not (control-mode = "Coordinated" and neighbour-congestion > 10) [
-      switch-phase
-      stop
-    ]
-  ]
-  
-  ;; Priority 7: Default Action - Extend current green phase
-  ;; (phase-timer already incremented at start of procedure)
-end
-
-to switch-phase
-  ;; Finite State Machine (FSM) Transitions
-  if current-phase = "NS-green" [
-    set current-phase "EW-green"
+  create-lights 1 [
+    set shape "circle"
+    set size 0.1
+    set hidden? true
+    setxy 0.5 0.5
+    set current-phase "N-green"
     set phase-timer 0
-    stop
-  ]
-  if current-phase = "EW-green" [
-    set current-phase "NS-green"
-    set phase-timer 0
-    stop
-  ]
-end
-
-to switch-to [ new-phase ]
-  set current-phase new-phase
-  set phase-timer 0
-end
-
-to update-signal-visuals
-  let phase current-phase
-  ask visual-lights with [ parent-light = myself ] [
-    if (light-type = "vehicle") [
-      if (light-dir = "N" or light-dir = "S") [
-        ifelse phase = "NS-green" [ set color green ] [ set color red ]
-      ]
-      if (light-dir = "E" or light-dir = "W") [
-        ifelse phase = "EW-green" [ set color green ] [ set color red ]
-      ]
-    ]
+    
+    let self-light self
+    
+    ;; Create visual light indicators at corners
+    ;; North approach (cars going South) -> Southbound is x = 1, 2
+    hatch-visual-lights 1 [ setxy 1 3 set shape "square" set size 1 set light-dir "S" set parent-light self-light set hidden? false ]
+    hatch-visual-lights 1 [ setxy 2 3 set shape "square" set size 1 set light-dir "S" set parent-light self-light set hidden? false ]
+    ;; South approach (cars going North) -> Northbound is x = -1, 0
+    hatch-visual-lights 1 [ setxy -1 -2 set shape "square" set size 1 set light-dir "N" set parent-light self-light set hidden? false ]
+    hatch-visual-lights 1 [ setxy 0 -2 set shape "square" set size 1 set light-dir "N" set parent-light self-light set hidden? false ]
+    ;; East approach (cars going West) -> Westbound is y = -1, 0
+    hatch-visual-lights 1 [ setxy 3 -1 set shape "square" set size 1 set light-dir "W" set parent-light self-light set hidden? false ]
+    hatch-visual-lights 1 [ setxy 3 0 set shape "square" set size 1 set light-dir "W" set parent-light self-light set hidden? false ]
+    ;; West approach (cars going East) -> Eastbound is y = 1, 2
+    hatch-visual-lights 1 [ setxy -2 1 set shape "square" set size 1 set light-dir "E" set parent-light self-light set hidden? false ]
+    hatch-visual-lights 1 [ setxy -2 2 set shape "square" set size 1 set light-dir "E" set parent-light self-light set hidden? false ]
+    
+    update-visuals
   ]
 end
 
-;; ============================================================================
-;; 4. VEHICLE MOVEMENT & INTERACTION RULES
-;; Section 6.2 of Report: Member 3
-;; ============================================================================
-
-to perceive-and-move
-  ;; Yield to pedestrians on crosswalk
-  let target-patch nobody
-  if current-road = "N" [ set target-patch patch-at 0 1 ]
-  if current-road = "S" [ set target-patch patch-at 0 -1 ]
-  if current-road = "E" [ set target-patch patch-at 1 0 ]
-  if current-road = "W" [ set target-patch patch-at -1 0 ]
-  
-  if target-patch != nobody [
-    ;; Rule 2: Stop for vehicles ahead (Collision avoidance)
-    if any? cars-on target-patch or any? emergencies-on target-patch [
-      set speed 0
-      set stopped? true
-      stop
-    ]
-  ]
-
-  ;; Rule: Obey Traffic Signals (Control obstacles)
-  ;; Only obey the light if entering the intersection (not inside or leaving it)
-  let entering? false
-  if current-road = "N" and ycor < -1 [ set entering? true ]
-  if current-road = "S" and ycor > 2 [ set entering? true ]
-  if current-road = "E" and xcor < -1 [ set entering? true ]
-  if current-road = "W" and xcor > 2 [ set entering? true ]
-  
-  if entering? and target-patch != nobody and ([intersection?] of target-patch or [crossing?] of target-patch) [
-    let light-ahead one-of lights in-radius 5
-    if light-ahead != nobody [
-      let phase [current-phase] of light-ahead
-      ;; Stop if light is red for my direction
-      if (current-road = "N" or current-road = "S") and phase != "NS-green" [
-        set speed 0
-        set stopped? true
-        set waiting-time waiting-time + 1
-        stop
-      ]
-      if (current-road = "E" or current-road = "W") and phase != "EW-green" [
-        set speed 0
-        set stopped? true
-        set waiting-time waiting-time + 1
-        stop
-      ]
-    ]
-  ]
-  
-  ;; Rule 3: Yield to Emergency Vehicles (Interaction rule)
-  if any? emergencies in-radius 3 [
-    set speed 0
-    set stopped? true
-    stop
-  ]
-  
-  ;; Rule 4: Accelerate and Move (Road clear)
-  set stopped? false
-  if speed < max-speed [ set speed speed + 0.2 ]
-  
-  if current-road = "N" [ set ycor ycor + speed ]
-  if current-road = "S" [ set ycor ycor - speed ]
-  if current-road = "E" [ set xcor xcor + speed ]
-  if current-road = "W" [ set xcor xcor - speed ]
-  
-  ;; Update road direction attribute based on patch
-  if patch-here != nobody and [road-dir] of patch-here != "INTERSECTION" [
-    set current-road [road-dir] of patch-here
-  ]
-end
-
-to move-emergency
-  ;; Emergency vehicles ignore red lights (Pre-emption assumed granted) but avoid collisions
-  let target-patch nobody
-  if road-dir = "N" [ set target-patch patch-at 0 1 ]
-  if road-dir = "S" [ set target-patch patch-at 0 -1 ]
-  if road-dir = "E" [ set target-patch patch-at 1 0 ]
-  if road-dir = "W" [ set target-patch patch-at -1 0 ]
-  
-  if target-patch != nobody and not any? cars-on target-patch [
-    if road-dir = "N" [ set ycor ycor + speed ]
-    if road-dir = "S" [ set ycor ycor - speed ]
-    if road-dir = "E" [ set xcor xcor + speed ]
-    if road-dir = "W" [ set xcor xcor - speed ]
-  ]
-  
-  if patch-here != nobody and [road-dir] of patch-here != "INTERSECTION" [
-    set road-dir [road-dir] of patch-here
-  ]
-  
-  if patch-here = nobody or not [road?] of patch-here [ die ]
-end
-
-to check-exit
-  ;; Remove vehicle when it reaches world boundary (Sink) on its way OUT
-  if (current-road = "E" and xcor >= max-pxcor - 1) or
-     (current-road = "W" and xcor <= min-pxcor + 1) or
-     (current-road = "N" and ycor >= max-pycor - 1) or
-     (current-road = "S" and ycor <= min-pycor + 1) [
-    ;; Data collection: record successful trip and waiting time
-    set completed-trips completed-trips + 1
-    set total-waiting-time total-waiting-time + waiting-time
-    die
-  ]
-end
-
-;; ============================================================================
-
-
-to spawn-vehicles
-  ;; Inject vehicles at boundary road patches (Sources)
-  let entry-patches patches with [ road? and not any? cars-on self and
-                                   ((pxcor = max-pxcor and road-dir = "W") or
-                                    (pxcor = min-pxcor and road-dir = "E") or
-                                    (pycor = max-pycor and road-dir = "S") or
-                                    (pycor = min-pycor and road-dir = "N")) ]
-  if any? entry-patches [
-    ask one-of entry-patches [
-      sprout-cars 1 [
-        let vehicle-type random 3
-        if vehicle-type = 0 [ set shape "car" set color one-of [blue red green yellow white black] set size 1.5 ]
-        if vehicle-type = 1 [ set shape "truck" set color one-of [gray brown white] set size 2.0 ]
-        if vehicle-type = 2 [ set shape "bug" set color one-of [red blue orange pink] set size 1.2 ]
-        
-        set speed 0.5
-        set max-speed 1.0
-        set waiting-time 0
-        set stopped? false
-        set current-road road-dir
-        set patience 50
-        ;; Face the correct visual driving direction
-        if current-road = "E" [ set heading 90 ]
-        if current-road = "W" [ set heading 270 ]
-        if current-road = "N" [ set heading 0 ]
-        if current-road = "S" [ set heading 180 ]
-      ]
-    ]
-  ]
-end
-
-to spawn-emergency
-  let entry-patches patches with [ road? and
-                                   ((pxcor = max-pxcor and road-dir = "W") or
-                                    (pxcor = min-pxcor and road-dir = "E") or
-                                    (pycor = max-pycor and road-dir = "S") or
-                                    (pycor = min-pycor and road-dir = "N")) ]
-  if any? entry-patches [
-    ask one-of entry-patches [
-      sprout-emergencies 1 [
-        set shape "truck"
-        set color red
-        set size 2
-        set speed 1.5
-        set siren-active? true
-        set waiting-time 0
-        if road-dir = "E" [ set heading 90 ]
-        if road-dir = "W" [ set heading 270 ]
-        if road-dir = "N" [ set heading 0 ]
-        if road-dir = "S" [ set heading 180 ]
-      ]
-    ]
-  ]
-end
-
-;; ============================================================================
-;; 6. DATA COLLECTION & ANALYSIS (Member 5)
-;; ============================================================================
-
-to update-metrics
-  ;; Calculate System Performance Measures (Section 7.1 of Report)
-  
-  ;; Average waiting time per vehicle across active and exited vehicles
-  let active-wait sum [waiting-time] of cars
-  let total-tracked-cars (count cars + completed-trips)
-  
-  ifelse total-tracked-cars > 0 [
-    set average-waiting-time (total-waiting-time + active-wait) / total-tracked-cars
-  ] [
-    set average-waiting-time 0
-  ]
-  
-  ;; Throughput: Rate of completed trips per 100 ticks
-  ifelse ticks > 0 [
-    set total-throughput (completed-trips / ticks) * 100
-  ] [
-    set total-throughput 0
-  ]
-  
-  ;; Update patch congestion levels dynamically for visualization/coordination
-  ask patches with [road?] [
-    set congestion-level count cars in-radius 3
-  ]
-end
-
-;; ============================================================================
-;; UI DRAWING HELPERS
-;; ============================================================================
-
-to draw-advanced-ui
+to draw-road-lines
   let x-segments (list (list min-pxcor -1.5) (list 2.5 max-pxcor))
   let y-segments (list (list min-pycor -1.5) (list 2.5 max-pycor))
 
@@ -518,9 +102,7 @@ to draw-advanced-ui
     foreach x-segments [ seg ->
       let x1 item 0 seg
       let x2 item 1 seg
-      ;; Solid dividing line
-      draw-line x1 y x2 y white 2
-      ;; Dashed lane dividers
+      draw-line x1 y x2 y yellow 2
       draw-dashed-line x1 (y + 1) x2 (y + 1) white 1 1
       draw-dashed-line x1 (y - 1) x2 (y - 1) white 1 1
     ]
@@ -531,34 +113,27 @@ to draw-advanced-ui
     foreach y-segments [ seg ->
       let y1 item 0 seg
       let y2 item 1 seg
-      ;; Solid dividing line
-      draw-line x y1 x y2 white 2
-      ;; Dashed lane dividers
+      draw-line x y1 x y2 yellow 2
       draw-dashed-line (x + 1) y1 (x + 1) y2 white 1 1
       draw-dashed-line (x - 1) y1 (x - 1) y2 white 1 1
     ]
   ]
-  ;; Draw stop lines and zebra crossings for the main intersection
-  foreach [ [0.5 0.5] ] [ coords ->
-    let cx item 0 coords
-    let cy item 1 coords
-    
-    ;; Stop lines ONLY for incoming lanes!
-    ;; North approach (cars going South)
-    draw-line cx (cy + 3) (cx + 2) (cy + 3) white 2
-    ;; South approach (cars going North)
-    draw-line (cx - 2) (cy - 3) cx (cy - 3) white 2
-    ;; East approach (cars going West)
-    draw-line (cx + 3) (cy - 2) (cx + 3) cy white 2
-    ;; West approach (cars going East)
-    draw-line (cx - 3) cy (cx - 3) (cy + 2) white 2
-    
-    ;; Zebra crossings
-    draw-zebra (cx - 2) (cy + 2) (cx + 2) (cy + 3) true  ;; Top
-    draw-zebra (cx - 2) (cy - 3) (cx + 2) (cy - 2) true  ;; Bottom
-    draw-zebra (cx + 2) (cy - 2) (cx + 3) (cy + 2) false ;; Right
-    draw-zebra (cx - 3) (cy - 2) (cx - 2) (cy + 2) false ;; Left
-  ]
+  
+  ;; Draw stop lines
+  let cx 0.5
+  let cy 0.5
+  ;; North approach (cars going South)
+  draw-line cx (cy + 2) (cx + 2) (cy + 2) white 2
+  draw-line cx (cy + 3) (cx + 2) (cy + 3) white 2
+  ;; South approach (cars going North)
+  draw-line (cx - 2) (cy - 2) cx (cy - 2) white 2
+  draw-line (cx - 2) (cy - 3) cx (cy - 3) white 2
+  ;; East approach (cars going West)
+  draw-line (cx + 2) (cy - 2) (cx + 2) cy white 2
+  draw-line (cx + 3) (cy - 2) (cx + 3) cy white 2
+  ;; West approach (cars going East)
+  draw-line (cx - 2) cy (cx - 2) (cy + 2) white 2
+  draw-line (cx - 3) cy (cx - 3) (cy + 2) white 2
 end
 
 to draw-line [x1 y1 x2 y2 lcolor thick]
@@ -599,22 +174,228 @@ to draw-dashed-line [x1 y1 x2 y2 lcolor thick d-len]
   ]
 end
 
-to draw-zebra [x1 y1 x2 y2 is-horizontal]
-  if is-horizontal [
-    let x min (list x1 x2) + 0.25
-    while [x <= max (list x1 x2)] [
-      draw-line x y1 x y2 white 2
-      set x x + 0.5
+to go
+  ask lights [ update-lights ]
+  spawn-vehicles
+  ask cars [ perceive-and-move ]
+  tick
+end
+
+to update-lights
+  set phase-timer phase-timer + 1
+  
+  let cars-waiting-N count cars with [current-road = "N" and ycor < -2]
+  let cars-waiting-S count cars with [current-road = "S" and ycor > 3]
+  let cars-waiting-E count cars with [current-road = "E" and xcor < -2]
+  let cars-waiting-W count cars with [current-road = "W" and xcor > 3]
+  
+  let current-waiting 0
+  if current-phase = "N-green" [ set current-waiting cars-waiting-N ]
+  if current-phase = "S-green" [ set current-waiting cars-waiting-S ]
+  if current-phase = "E-green" [ set current-waiting cars-waiting-E ]
+  if current-phase = "W-green" [ set current-waiting cars-waiting-W ]
+  
+  let total-others-waiting (cars-waiting-N + cars-waiting-S + cars-waiting-E + cars-waiting-W) - current-waiting
+  
+  let is-green-phase? (current-phase = "N-green" or current-phase = "S-green" or current-phase = "E-green" or current-phase = "W-green")
+  
+  ifelse is-green-phase? [
+    let switch? false
+    if phase-timer >= 30 and current-waiting = 0 and total-others-waiting > 0 [
+      set switch? true
+    ]
+    if phase-timer >= max-green and total-others-waiting > 0 [
+      set switch? true
+    ]
+    
+    if switch? [
+      if current-phase = "N-green" [ set current-phase "N-yellow" ]
+      if current-phase = "S-green" [ set current-phase "S-yellow" ]
+      if current-phase = "E-green" [ set current-phase "E-yellow" ]
+      if current-phase = "W-green" [ set current-phase "W-yellow" ]
+      set phase-timer 0
+    ]
+  ] [
+    ;; It's a yellow phase
+    let intersection-clear? not any? cars with [[intersection?] of patch-here]
+    
+    ;; Wait for at least 7 ticks AND for the intersection to be clear. Force switch after 30 ticks just in case.
+    if phase-timer >= 7 and (intersection-clear? or phase-timer > 30) [
+      let demand-N cars-waiting-N
+      let demand-S cars-waiting-S
+      let demand-E cars-waiting-E
+      let demand-W cars-waiting-W
+      
+      if current-phase = "N-yellow" [ set demand-N -1 ]
+      if current-phase = "S-yellow" [ set demand-S -1 ]
+      if current-phase = "E-yellow" [ set demand-E -1 ]
+      if current-phase = "W-yellow" [ set demand-W -1 ]
+      
+      let max-other max (list demand-N demand-S demand-E demand-W)
+      
+      ifelse max-other > 0 [
+        let picked? false
+        if max-other = demand-N and not picked? [ set current-phase "N-green" set picked? true ]
+        if max-other = demand-S and not picked? [ set current-phase "S-green" set picked? true ]
+        if max-other = demand-E and not picked? [ set current-phase "E-green" set picked? true ]
+        if max-other = demand-W and not picked? [ set current-phase "W-green" set picked? true ]
+      ] [
+        let picked? false
+        if current-phase = "N-yellow" and not picked? [ set current-phase "S-green" set picked? true ]
+        if current-phase = "S-yellow" and not picked? [ set current-phase "E-green" set picked? true ]
+        if current-phase = "E-yellow" and not picked? [ set current-phase "W-green" set picked? true ]
+        if current-phase = "W-yellow" and not picked? [ set current-phase "N-green" set picked? true ]
+      ]
+      set phase-timer 0
     ]
   ]
-  if not is-horizontal [
-    let y min (list y1 y2) + 0.25
-    while [y <= max (list y1 y2)] [
-      draw-line x1 y x2 y white 2
-      set y y + 0.5
+  
+  update-visuals
+end
+
+to update-visuals
+  let phase current-phase
+  ask visual-lights with [parent-light = myself] [
+    set color red
+    ;; Main Phase
+    if light-dir = "N" and phase = "N-green" [ set color green ]
+    if light-dir = "N" and phase = "N-yellow" [ set color yellow ]
+    
+    if light-dir = "S" and phase = "S-green" [ set color green ]
+    if light-dir = "S" and phase = "S-yellow" [ set color yellow ]
+    
+    if light-dir = "E" and phase = "E-green" [ set color green ]
+    if light-dir = "E" and phase = "E-yellow" [ set color yellow ]
+    
+    if light-dir = "W" and phase = "W-green" [ set color green ]
+    if light-dir = "W" and phase = "W-yellow" [ set color yellow ]
+    
+    ;; Continuous Flow Left-Turn Lanes (Always Green)
+    ;; Since left turns use dedicated outer lanes and never cross or merge with any other traffic,
+    ;; they can be permanently green!
+    if light-dir = "N" and xcor = -1 [ set color green ]
+    if light-dir = "S" and xcor = 2 [ set color green ]
+    if light-dir = "E" and ycor = 2 [ set color green ]
+    if light-dir = "W" and ycor = -1 [ set color green ]
+  ]
+end
+
+to spawn-vehicles
+  let spawn-dirs ["N" "S" "E" "W"]
+  
+  foreach spawn-dirs [ dir ->
+    if random 100 < traffic-density [
+      let intention one-of ["straight" "left" "right"]
+      let spawn-x 0
+      let spawn-y 0
+      
+      if dir = "N" [
+        set spawn-y min-pycor
+        ifelse intention = "left" [ set spawn-x -1 ] [ set spawn-x 0 ]
+      ]
+      if dir = "S" [
+        set spawn-y max-pycor
+        ifelse intention = "left" [ set spawn-x 2 ] [ set spawn-x 1 ]
+      ]
+      if dir = "E" [
+        set spawn-x min-pxcor
+        ifelse intention = "left" [ set spawn-y 2 ] [ set spawn-y 1 ]
+      ]
+      if dir = "W" [
+        set spawn-x max-pxcor
+        ifelse intention = "left" [ set spawn-y -1 ] [ set spawn-y 0 ]
+      ]
+      
+      let spawn-patch patch spawn-x spawn-y
+      if spawn-patch != nobody and not any? cars-on spawn-patch [
+        ask spawn-patch [
+          sprout-cars 1 [
+            set shape "car"
+            set color one-of [blue red green yellow white black]
+            set size 1.5
+            set speed 0.5
+            set max-speed 1.0
+            set current-road dir
+            set turn-intention intention
+            
+            if current-road = "E" [ set heading 90 ]
+            if current-road = "W" [ set heading 270 ]
+            if current-road = "N" [ set heading 0 ]
+            if current-road = "S" [ set heading 180 ]
+          ]
+        ]
+      ]
     ]
   ]
-end]]></code>
+end
+
+to perceive-and-move
+  ;; 1. Obey Traffic Light
+  let entering? false
+  if current-road = "N" and ycor < -2 [ set entering? true ]
+  if current-road = "S" and ycor > 3 [ set entering? true ]
+  if current-road = "E" and xcor < -2 [ set entering? true ]
+  if current-road = "W" and xcor > 3 [ set entering? true ]
+  
+  if entering? and patch-ahead 2 != nobody and [intersection?] of (patch-ahead 2) [
+    let my-light one-of lights
+    if my-light != nobody [
+      let phase [current-phase] of my-light
+      
+      let green-light? false
+      if current-road = "N" and (phase = "N-green" or xcor = -1) [ set green-light? true ]
+      if current-road = "S" and (phase = "S-green" or xcor = 2) [ set green-light? true ]
+      if current-road = "E" and (phase = "E-green" or ycor = 2) [ set green-light? true ]
+      if current-road = "W" and (phase = "W-green" or ycor = -1) [ set green-light? true ]
+      
+      if not green-light? [
+        set speed 0 stop
+      ]
+    ]
+  ]
+  
+  ;; 2. Intersection Turning Logic
+  if [intersection?] of patch-here [
+    let p patch-here
+    
+    if current-road = "S" [
+      if turn-intention = "left" and [pycor] of p = 2 [ set current-road "E" set heading 90 set ycor 2 set turn-intention "straight" ]
+      if turn-intention = "right" and [pycor] of p = 0 [ set current-road "W" set heading 270 set ycor 0 set turn-intention "straight" ]
+    ]
+    if current-road = "N" [
+      if turn-intention = "left" and [pycor] of p = -1 [ set current-road "W" set heading 270 set ycor -1 set turn-intention "straight" ]
+      if turn-intention = "right" and [pycor] of p = 1 [ set current-road "E" set heading 90 set ycor 1 set turn-intention "straight" ]
+    ]
+    if current-road = "E" [
+      if turn-intention = "left" and [pxcor] of p = -1 [ set current-road "N" set heading 0 set xcor -1 set turn-intention "straight" ]
+      if turn-intention = "right" and [pxcor] of p = 1 [ set current-road "S" set heading 180 set xcor 1 set turn-intention "straight" ]
+    ]
+    if current-road = "W" [
+      if turn-intention = "left" and [pxcor] of p = 2 [ set current-road "S" set heading 180 set xcor 2 set turn-intention "straight" ]
+      if turn-intention = "right" and [pxcor] of p = 0 [ set current-road "N" set heading 0 set xcor 0 set turn-intention "straight" ]
+    ]
+  ]
+  
+  ;; 3. Determine target patch & Collision Avoidance
+  let target-patch patch-ahead 1
+  if target-patch != nobody [
+    if any? cars-on target-patch [
+      set speed 0
+      stop
+    ]
+  ]
+  
+  ;; 4. Accelerate and Move
+  if speed < max-speed [ set speed speed + 0.2 ]
+  fd speed
+  
+  ;; 5. Remove cars at boundary
+  if (current-road = "N" and ycor >= max-pycor - 1) [ die ]
+  if (current-road = "S" and ycor <= min-pycor + 1) [ die ]
+  if (current-road = "E" and xcor >= max-pxcor - 1) [ die ]
+  if (current-road = "W" and xcor <= min-pxcor + 1) [ die ]
+end
+]]></code>
   <widgets>
     <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="-17" height="714" showTickCounter="true" patchSize="20.0" fontSize="10" wrappingAllowedY="true" width="714" tickCounterLabel="ticks" maxPycor="17" updateMode="0" maxPxcor="17" minPxcor="-17"></view>
     <button x="40" y="45" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
