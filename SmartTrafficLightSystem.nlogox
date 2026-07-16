@@ -16,6 +16,7 @@ globals [
 breed [ cars car ]
 breed [ lights light ]
 breed [ pedestrians pedestrian ]
+pedestrians-own [ waiting-time crossing-location crossing? ]
 breed [ visual-lights visual-light ]
 
 visual-lights-own [ light-dir parent-light ]
@@ -212,26 +213,34 @@ to draw-crosswalk [x1 y1 x2 y2 dir]
 end
 
 to press-pedestrian-button
-  if not member? "West" pedestrian-queue and pedestrian-active-crosswalk != "West" [
-    set pedestrian-queue lput "West" pedestrian-queue
+  if pedestrians-enabled? [
+    if not member? "West" pedestrian-queue and pedestrian-active-crosswalk != "West" [
+      set pedestrian-queue lput "West" pedestrian-queue
+    ]
   ]
 end
 
 to press-pedestrian-button-south
-  if not member? "South" pedestrian-queue and pedestrian-active-crosswalk != "South" [
-    set pedestrian-queue lput "South" pedestrian-queue
+  if pedestrians-enabled? [
+    if not member? "South" pedestrian-queue and pedestrian-active-crosswalk != "South" [
+      set pedestrian-queue lput "South" pedestrian-queue
+    ]
   ]
 end
 
 to press-pedestrian-button-east
-  if not member? "East" pedestrian-queue and pedestrian-active-crosswalk != "East" [
-    set pedestrian-queue lput "East" pedestrian-queue
+  if pedestrians-enabled? [
+    if not member? "East" pedestrian-queue and pedestrian-active-crosswalk != "East" [
+      set pedestrian-queue lput "East" pedestrian-queue
+    ]
   ]
 end
 
 to press-pedestrian-button-north
-  if not member? "North" pedestrian-queue and pedestrian-active-crosswalk != "North" [
-    set pedestrian-queue lput "North" pedestrian-queue
+  if pedestrians-enabled? [
+    if not member? "North" pedestrian-queue and pedestrian-active-crosswalk != "North" [
+      set pedestrian-queue lput "North" pedestrian-queue
+    ]
   ]
 end
 
@@ -332,66 +341,60 @@ to go
     ]
   ]
   
-  if [current-phase] of one-of lights = "pedestrian-west" and [phase-timer] of one-of lights < 50 [
-    if random 100 < 30 [
-      let p-spawn-y one-of [-1.5 2.5]
-      let p-spawn-x (random-float 1.0) - 2.5
+  if pedestrians-enabled? [
+    if random 100 < 5 [
+      let loc one-of ["West" "South" "East" "North"]
       create-pedestrians 1 [
         set shape "dot"
         set color black
         set size 0.5
-        setxy p-spawn-x p-spawn-y
-        ifelse p-spawn-y = -1.5 [ set heading 0 ] [ set heading 180 ]
-      ]
-    ]
-  ]
-  
-  if [current-phase] of one-of lights = "pedestrian-south" and [phase-timer] of one-of lights < 50 [
-    if random 100 < 30 [
-      let p-spawn-x one-of [-1.5 2.5]
-      let p-spawn-y (random-float 1.0) - 2.5
-      create-pedestrians 1 [
-        set shape "dot"
-        set color black
-        set size 0.5
-        setxy p-spawn-x p-spawn-y
-        ifelse p-spawn-x = -1.5 [ set heading 90 ] [ set heading 270 ]
-      ]
-    ]
-  ]
-  
-  if [current-phase] of one-of lights = "pedestrian-east" and [phase-timer] of one-of lights < 50 [
-    if random 100 < 30 [
-      let p-spawn-y one-of [-1.5 2.5]
-      let p-spawn-x (random-float 1.0) + 2.5
-      create-pedestrians 1 [
-        set shape "dot"
-        set color black
-        set size 0.5
-        setxy p-spawn-x p-spawn-y
-        ifelse p-spawn-y = -1.5 [ set heading 0 ] [ set heading 180 ]
-      ]
-    ]
-  ]
-  
-  if [current-phase] of one-of lights = "pedestrian-north" and [phase-timer] of one-of lights < 50 [
-    if random 100 < 30 [
-      let p-spawn-x one-of [-1.5 2.5]
-      let p-spawn-y (random-float 1.0) + 2.5
-      create-pedestrians 1 [
-        set shape "dot"
-        set color black
-        set size 0.5
-        setxy p-spawn-x p-spawn-y
-        ifelse p-spawn-x = -1.5 [ set heading 90 ] [ set heading 270 ]
+        set waiting-time 0
+        set crossing? false
+        set crossing-location loc
+        
+        if loc = "West" [
+          setxy (random-float 1.0 - 2.5) (one-of [-1.5 2.5])
+          ifelse ycor = -1.5 [ set heading 0 ] [ set heading 180 ]
+        ]
+        if loc = "East" [
+          setxy (random-float 1.0 + 2.5) (one-of [-1.5 2.5])
+          ifelse ycor = -1.5 [ set heading 0 ] [ set heading 180 ]
+        ]
+        if loc = "South" [
+          setxy (one-of [-1.5 2.5]) (random-float 1.0 - 2.5)
+          ifelse xcor = -1.5 [ set heading 90 ] [ set heading 270 ]
+        ]
+        if loc = "North" [
+          setxy (one-of [-1.5 2.5]) (random-float 1.0 + 2.5)
+          ifelse xcor = -1.5 [ set heading 90 ] [ set heading 270 ]
+        ]
       ]
     ]
   ]
 
   ask pedestrians [
-    fd 0.1
-    if (heading = 0 or heading = 180) and (ycor > 2.5 or ycor < -1.5) [ die ]
-    if (heading = 90 or heading = 270) and (xcor > 2.5 or xcor < -1.5) [ die ]
+    ifelse not crossing? [
+      set waiting-time waiting-time + 1
+      
+      if not member? crossing-location pedestrian-queue and pedestrian-active-crosswalk != crossing-location [
+        set pedestrian-queue lput crossing-location pedestrian-queue
+      ]
+      
+      if pedestrian-state = "ACTIVE" and pedestrian-active-crosswalk = crossing-location [
+        let current-light one-of lights
+        if [phase-timer] of current-light < 50 [
+          set crossing? true
+        ]
+      ]
+    ] [
+      fd 0.1
+      if crossing-location = "West" or crossing-location = "East" [
+        if (heading = 0 and ycor > 2.5) or (heading = 180 and ycor < -1.5) [ die ]
+      ]
+      if crossing-location = "South" or crossing-location = "North" [
+        if (heading = 90 and xcor > 2.5) or (heading = 270 and xcor < -1.5) [ die ]
+      ]
+    ]
   ]
   
   tick
@@ -770,12 +773,13 @@ end
       <choice type="string" value="Coordinated"></choice>
     </chooser>
     <switch x="40" y="425" height="40" on="true" variable="emergency-vehicles?" width="145" display="emergency-vehicles?"></switch>
+    <switch x="40" y="475" height="40" on="true" variable="pedestrians-enabled?" width="145" display="pedestrians-enabled?"></switch>
     <button x="40" y="45" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
-    <button x="40" y="495" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (West)">press-pedestrian-button</button>
-    <button x="40" y="545" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (South)">press-pedestrian-button-south</button>
-    <button x="40" y="595" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (North)">press-pedestrian-button-north</button>
-    <button x="40" y="645" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (East)">press-pedestrian-button-east</button>
-    <monitor x="40" precision="17" y="715" height="60" fontSize="11" width="100">average-waiting-time</monitor>
+    <button x="40" y="525" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (West)">press-pedestrian-button</button>
+    <button x="40" y="575" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (South)">press-pedestrian-button-south</button>
+    <button x="40" y="625" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (North)">press-pedestrian-button-north</button>
+    <button x="40" y="675" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (East)">press-pedestrian-button-east</button>
+    <monitor x="40" precision="17" y="730" height="60" fontSize="11" width="165">average-waiting-time</monitor>
   </widgets>
   <info>## WHAT IS IT?
 
