@@ -31,6 +31,8 @@ cars-own [
   current-road
   turn-intention ;; "straight", "left", "right"
   is-emergency?
+  waiting-time
+  patience
 ]
 
 patches-own [
@@ -286,7 +288,49 @@ to go
 
   ask lights [ update-lights ]
   spawn-vehicles
-  ask cars [ perceive-and-move ]
+  ask cars [
+    perceive-and-move
+    if speed = 0 [ 
+      set waiting-time waiting-time + 1 
+      if waiting-time > patience [
+        let queuing? false
+        if current-road = "N" and ycor >= 3 [ set queuing? true ]
+        if current-road = "S" and ycor <= -2 [ set queuing? true ]
+        if current-road = "E" and xcor >= 3 [ set queuing? true ]
+        if current-road = "W" and xcor <= -2 [ set queuing? true ]
+        
+        if queuing? [
+          let target-x xcor
+          let target-y ycor
+          
+          ifelse turn-intention != "left" [
+            if current-road = "N" [ set target-x xcor - 1 ]
+            if current-road = "S" [ set target-x xcor + 1 ]
+            if current-road = "E" [ set target-y ycor + 1 ]
+            if current-road = "W" [ set target-y ycor - 1 ]
+          ] [
+            if current-road = "N" [ set target-x xcor + 1 ]
+            if current-road = "S" [ set target-x xcor - 1 ]
+            if current-road = "E" [ set target-y ycor - 1 ]
+            if current-road = "W" [ set target-y ycor + 1 ]
+          ]
+          
+          let p patch target-x target-y
+          if p != nobody and not any? cars-on p [
+             set xcor target-x
+             set ycor target-y
+             ifelse turn-intention = "left" [
+               set turn-intention one-of ["straight" "right"]
+             ] [
+               set turn-intention "left"
+             ]
+             set waiting-time 0
+             set patience patience + 100
+          ]
+        ]
+      ]
+    ]
+  ]
   
   if [current-phase] of one-of lights = "pedestrian-west" and [phase-timer] of one-of lights < 50 [
     if random 100 < 30 [
@@ -596,6 +640,8 @@ to spawn-vehicles
             set current-road dir
             set turn-intention intention
             set is-emergency? false
+            set waiting-time 0
+            set patience (150 + random 250)
             set color one-of [blue brown]
             
             if emergency-vehicles? and random 100 < 2 [
@@ -705,6 +751,11 @@ to perceive-and-move
   if (current-road = "E" and xcor >= max-pxcor - 1) [ die ]
   if (current-road = "W" and xcor <= min-pxcor + 1) [ die ]
 end
+
+to-report average-waiting-time
+  if count cars = 0 [ report 0 ]
+  report mean [waiting-time] of cars
+end
 ]]></code>
   <widgets>
     <view x="310" wrappingAllowedX="true" y="15" frameRate="30.0" minPycor="-17" height="714" showTickCounter="true" patchSize="20.0" fontSize="10" wrappingAllowedY="true" width="714" tickCounterLabel="ticks" maxPycor="17" updateMode="0" maxPxcor="17" minPxcor="-17"></view>
@@ -724,6 +775,7 @@ end
     <button x="40" y="545" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (South)">press-pedestrian-button-south</button>
     <button x="40" y="595" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (North)">press-pedestrian-button-north</button>
     <button x="40" y="645" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (East)">press-pedestrian-button-east</button>
+    <monitor x="40" precision="17" y="715" height="60" fontSize="11" width="100">average-waiting-time</monitor>
   </widgets>
   <info>## WHAT IS IT?
 
