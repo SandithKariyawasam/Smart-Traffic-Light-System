@@ -490,11 +490,29 @@ to update-lights
     ]
     
     if emergency-dir = "NONE" [
-      if phase-timer >= 30 and current-waiting = 0 and total-others-waiting > 0 [
-        set switch? true
+      if control-mode = "Fixed" [
+        if phase-timer >= max-green [ set switch? true ]
       ]
-      if phase-timer >= max-green and total-others-waiting > 0 [
-        set switch? true
+      if control-mode = "Adaptive" [
+        if phase-timer >= min-green [
+          if (current-waiting = 0 and total-others-waiting > 0) or (total-others-waiting - current-waiting >= switching-threshold) [
+            set switch? true
+          ]
+        ]
+        if phase-timer >= max-green and total-others-waiting > 0 [
+          set switch? true
+        ]
+      ]
+      if control-mode = "Coordinated" [
+        let extended-max-green (max-green * 1.5)
+        if phase-timer >= min-green [
+          if (current-waiting = 0 and total-others-waiting > 0) or (total-others-waiting - current-waiting >= switching-threshold) [
+            set switch? true
+          ]
+        ]
+        if phase-timer >= extended-max-green and total-others-waiting > 0 [
+          set switch? true
+        ]
       ]
     ]
     
@@ -759,6 +777,17 @@ to-report average-waiting-time
   if count cars = 0 [ report 0 ]
   report mean [waiting-time] of cars
 end
+
+to-report average-ev-waiting-time
+  let evs cars with [is-emergency?]
+  if count evs = 0 [ report 0 ]
+  report mean [waiting-time] of evs
+end
+
+to-report average-pedestrian-waiting-time
+  if count pedestrians = 0 [ report 0 ]
+  report mean [waiting-time] of pedestrians
+end
 ]]></code>
   <widgets>
     <view x="310" wrappingAllowedX="true" y="15" frameRate="30.0" minPycor="-17" height="714" showTickCounter="true" patchSize="20.0" fontSize="10" wrappingAllowedY="true" width="714" tickCounterLabel="ticks" maxPycor="17" updateMode="0" maxPxcor="17" minPxcor="-17"></view>
@@ -767,7 +796,7 @@ end
     <slider x="40" step="1" y="150" max="30" width="250" display="min-green" height="50" min="5" direction="Horizontal" default="10.0" variable="min-green"></slider>
     <slider x="40" step="1" y="205" max="120" width="250" display="max-green" height="50" min="30" direction="Horizontal" default="60.0" variable="max-green"></slider>
     <slider x="40" step="1" y="260" max="10" width="250" display="switching-threshold" height="50" min="1" direction="Horizontal" default="3.0" variable="switching-threshold"></slider>
-    <chooser x="40" y="340" height="60" variable="control-mode" current="0" width="250" display="control-mode">
+    <chooser x="40" y="340" height="60" variable="control-mode" current="2" width="250" display="control-mode">
       <choice type="string" value="Fixed"></choice>
       <choice type="string" value="Adaptive"></choice>
       <choice type="string" value="Coordinated"></choice>
@@ -779,7 +808,33 @@ end
     <button x="40" y="575" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (South)">press-pedestrian-button-south</button>
     <button x="40" y="625" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (North)">press-pedestrian-button-north</button>
     <button x="40" y="675" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (East)">press-pedestrian-button-east</button>
-    <monitor x="40" precision="17" y="730" height="60" fontSize="11" width="165">average-waiting-time</monitor>
+    <monitor x="40" precision="17" y="730" height="60" fontSize="11" width="205">average-waiting-time</monitor>
+    <monitor x="40" precision="17" y="795" height="60" fontSize="11" width="205" display="average-ev-waiting-time">average-ev-waiting-time</monitor>
+    <monitor x="40" precision="17" y="860" height="60" fontSize="11" width="205" display="avg-pedestrian-waiting-time">average-pedestrian-waiting-time</monitor>
+    <plot x="310" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg Car Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Cars" color="-16776961" legend="true">
+        <setup></setup>
+        <update>plot average-waiting-time</update>
+      </pen>
+    </plot>
+    <plot x="545" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg EV Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="EVs" color="-65536" legend="true">
+        <setup></setup>
+        <update>plot average-ev-waiting-time</update>
+      </pen>
+    </plot>
+    <plot x="780" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg Ped Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Peds" color="-16777216" legend="true">
+        <setup></setup>
+        <update>plot average-pedestrian-waiting-time</update>
+      </pen>
+    </plot>
   </widgets>
   <info>## WHAT IS IT?
 
