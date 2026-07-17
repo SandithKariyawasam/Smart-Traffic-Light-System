@@ -11,6 +11,7 @@ globals [
   east-exchanged?
   north-exchanged?
   west-exchanged?
+  active-emergency-dir
 ]
 
 breed [ cars car ]
@@ -34,6 +35,7 @@ cars-own [
   is-emergency?
   waiting-time
   patience
+  overtaking?
 ]
 
 patches-own [
@@ -48,6 +50,7 @@ to setup
   set pedestrian-state "IDLE"
   set pedestrian-active-crosswalk "NONE"
   set pedestrian-timer 0
+  set active-emergency-dir "NONE"
   set south-exchanged? false
   set east-exchanged? false
   set north-exchanged? false
@@ -61,7 +64,20 @@ to setup-environment
     set road? false
     set intersection? false
     set road-dir "NONE"
-    set pcolor black
+    
+    ;; City Layout Base
+    ifelse pxcor > 2 and pycor > 2 [
+      ;; Park (Top Right)
+      set pcolor 55 ;; Green grass
+      if random 100 < 15 [ set pcolor 53 ] ;; Dark green trees
+    ] [
+      ;; City Blocks
+      set pcolor 2 ;; Dark gray concrete
+      if random 100 < 30 [
+        ;; Randomly colored buildings
+        set pcolor one-of [33 34 35 104 105 84 85 14]
+      ]
+    ]
   ]
   
   ;; Vertical Road (North-South)
@@ -82,6 +98,13 @@ to setup-environment
   ask patches with [road? and (pxcor >= -1 and pxcor <= 2) and (pycor >= -1 and pycor <= 2)] [
     set intersection? true
     set road-dir "INTERSECTION"
+  ]
+  
+  ;; Sidewalks
+  ask patches with [not road?] [
+    if any? neighbors with [road?] [
+      set pcolor 7 ;; Light gray for sidewalks
+    ]
   ]
   
   draw-road-lines
@@ -246,52 +269,54 @@ end
 
 to go
   ;; Pedestrian State Machine
-  if pedestrian-state = "IDLE" [
-    if length pedestrian-queue > 0 [
-      set pedestrian-active-crosswalk item 0 pedestrian-queue
-      set pedestrian-queue remove-item 0 pedestrian-queue
-      set pedestrian-state "WAITING"
-      set pedestrian-timer 40
-    ]
-  ]
-  
-  if pedestrian-state = "WAITING" [
-    set pedestrian-timer pedestrian-timer - 1
-    if pedestrian-timer <= 0 [
-      set pedestrian-state "ACTIVE"
-      if pedestrian-active-crosswalk = "West" [
-        set south-exchanged? true
-        ask lights [ set current-phase "pedestrian-west" set phase-timer 0 ]
-      ]
-      if pedestrian-active-crosswalk = "South" [
-        set east-exchanged? true
-        ask lights [ set current-phase "pedestrian-south" set phase-timer 0 ]
-      ]
-      if pedestrian-active-crosswalk = "East" [
-        set north-exchanged? true
-        ask lights [ set current-phase "pedestrian-east" set phase-timer 0 ]
-      ]
-      if pedestrian-active-crosswalk = "North" [
-        set west-exchanged? true
-        ask lights [ set current-phase "pedestrian-north" set phase-timer 0 ]
+  if active-emergency-dir = "NONE" [
+    if pedestrian-state = "IDLE" [
+      if length pedestrian-queue > 0 [
+        set pedestrian-active-crosswalk item 0 pedestrian-queue
+        set pedestrian-queue remove-item 0 pedestrian-queue
+        set pedestrian-state "WAITING"
+        set pedestrian-timer 40
       ]
     ]
-  ]
-  
-  if pedestrian-state = "ACTIVE" [
-    let is-ped-phase? false
-    ask lights [ if current-phase = "pedestrian-west" or current-phase = "pedestrian-south" or current-phase = "pedestrian-east" or current-phase = "pedestrian-north" [ set is-ped-phase? true ] ]
-    if not is-ped-phase? [
-      set pedestrian-state "BUFFER"
-      set pedestrian-active-crosswalk "NONE"
-      set pedestrian-timer 50
+    
+    if pedestrian-state = "WAITING" [
+      set pedestrian-timer pedestrian-timer - 1
+      if pedestrian-timer <= 0 [
+        set pedestrian-state "ACTIVE"
+        if pedestrian-active-crosswalk = "West" [
+          set south-exchanged? true
+          ask lights [ set current-phase "pedestrian-west" set phase-timer 0 ]
+        ]
+        if pedestrian-active-crosswalk = "South" [
+          set east-exchanged? true
+          ask lights [ set current-phase "pedestrian-south" set phase-timer 0 ]
+        ]
+        if pedestrian-active-crosswalk = "East" [
+          set north-exchanged? true
+          ask lights [ set current-phase "pedestrian-east" set phase-timer 0 ]
+        ]
+        if pedestrian-active-crosswalk = "North" [
+          set west-exchanged? true
+          ask lights [ set current-phase "pedestrian-north" set phase-timer 0 ]
+        ]
+      ]
     ]
-  ]
-  
-  if pedestrian-state = "BUFFER" [
-    set pedestrian-timer pedestrian-timer - 1
-    if pedestrian-timer <= 0 [
-      set pedestrian-state "IDLE"
+    
+    if pedestrian-state = "ACTIVE" [
+      let is-ped-phase? false
+      ask lights [ if current-phase = "pedestrian-west" or current-phase = "pedestrian-south" or current-phase = "pedestrian-east" or current-phase = "pedestrian-north" [ set is-ped-phase? true ] ]
+      if not is-ped-phase? [
+        set pedestrian-state "BUFFER"
+        set pedestrian-active-crosswalk "NONE"
+        set pedestrian-timer 50
+      ]
+    ]
+    
+    if pedestrian-state = "BUFFER" [
+      set pedestrian-timer pedestrian-timer - 1
+      if pedestrian-timer <= 0 [
+        set pedestrian-state "IDLE"
+      ]
     ]
   ]
 
@@ -341,7 +366,7 @@ to go
     ]
   ]
   
-  if pedestrians-enabled? [
+  if pedestrians-enabled? and active-emergency-dir = "NONE" [
     if random 100 < 5 [
       let loc one-of ["West" "South" "East" "North"]
       create-pedestrians 1 [
@@ -382,7 +407,7 @@ to go
       
       if pedestrian-state = "ACTIVE" and pedestrian-active-crosswalk = crossing-location [
         let current-light one-of lights
-        if [phase-timer] of current-light < 50 [
+        if [phase-timer] of current-light < 50 and active-emergency-dir = "NONE" [
           set crossing? true
         ]
       ]
@@ -403,48 +428,8 @@ end
 to update-lights
   set phase-timer phase-timer + 1
   
-  if current-phase = "pedestrian-west" [
-    if phase-timer >= 100 [
-      set current-phase "N-green"
-      set phase-timer 0
-      set south-exchanged? false
-    ]
-    update-visuals
-    stop
-  ]
-  
-  if current-phase = "pedestrian-south" [
-    if phase-timer >= 100 [
-      set current-phase "N-green"
-      set phase-timer 0
-      set east-exchanged? false
-    ]
-    update-visuals
-    stop
-  ]
-  
-  if current-phase = "pedestrian-east" [
-    if phase-timer >= 100 [
-      set current-phase "N-green"
-      set phase-timer 0
-      set north-exchanged? false
-    ]
-    update-visuals
-    stop
-  ]
-  
-  if current-phase = "pedestrian-north" [
-    if phase-timer >= 100 [
-      set current-phase "N-green"
-      set phase-timer 0
-      set west-exchanged? false
-    ]
-    update-visuals
-    stop
-  ]
-  
-  ;; Emergency vehicle override logic
-  let emergency-dir "NONE"
+  ;; Emergency vehicle override logic MUST be calculated first
+  set active-emergency-dir "NONE"
   if emergency-vehicles? [
     let approaching-evs cars with [is-emergency? and (distancexy 0.5 0.5 < 15)]
     if any? approaching-evs [
@@ -457,9 +442,49 @@ to update-lights
       if dir = "W" and [xcor] of closest-ev > 1 [ set heading-towards? true ]
       
       if heading-towards? [
-         set emergency-dir dir
+         set active-emergency-dir dir
       ]
     ]
+  ]
+  
+  if current-phase = "pedestrian-west" [
+    if phase-timer >= 100 or active-emergency-dir != "NONE" [
+      ifelse active-emergency-dir != "NONE" [ set current-phase (word active-emergency-dir "-green") ] [ set current-phase "N-green" ]
+      set phase-timer 0
+      set south-exchanged? false
+    ]
+    update-visuals
+    stop
+  ]
+  
+  if current-phase = "pedestrian-south" [
+    if phase-timer >= 100 or active-emergency-dir != "NONE" [
+      ifelse active-emergency-dir != "NONE" [ set current-phase (word active-emergency-dir "-green") ] [ set current-phase "N-green" ]
+      set phase-timer 0
+      set east-exchanged? false
+    ]
+    update-visuals
+    stop
+  ]
+  
+  if current-phase = "pedestrian-east" [
+    if phase-timer >= 100 or active-emergency-dir != "NONE" [
+      ifelse active-emergency-dir != "NONE" [ set current-phase (word active-emergency-dir "-green") ] [ set current-phase "N-green" ]
+      set phase-timer 0
+      set north-exchanged? false
+    ]
+    update-visuals
+    stop
+  ]
+  
+  if current-phase = "pedestrian-north" [
+    if phase-timer >= 100 or active-emergency-dir != "NONE" [
+      ifelse active-emergency-dir != "NONE" [ set current-phase (word active-emergency-dir "-green") ] [ set current-phase "N-green" ]
+      set phase-timer 0
+      set west-exchanged? false
+    ]
+    update-visuals
+    stop
   ]
 
   let cars-waiting-N count cars with [current-road = "N" and ycor < -2]
@@ -480,8 +505,8 @@ to update-lights
   ifelse is-green-phase? [
     let switch? false
     
-    if emergency-dir != "NONE" [
-      let ev-phase (word emergency-dir "-green")
+    if active-emergency-dir != "NONE" [
+      let ev-phase (word active-emergency-dir "-green")
       ifelse current-phase = ev-phase [
          set phase-timer 0 ;; hold green
       ] [
@@ -489,7 +514,7 @@ to update-lights
       ]
     ]
     
-    if emergency-dir = "NONE" [
+    if active-emergency-dir = "NONE" [
       if control-mode = "Fixed" [
         if phase-timer >= max-green [ set switch? true ]
       ]
@@ -529,8 +554,8 @@ to update-lights
     
     ;; Wait for at least 7 ticks AND for the intersection to be clear. Force switch after 30 ticks just in case.
     if phase-timer >= 7 and (intersection-clear? or phase-timer > 30) [
-      ifelse emergency-dir != "NONE" [
-         set current-phase (word emergency-dir "-green")
+      ifelse active-emergency-dir != "NONE" [
+         set current-phase (word active-emergency-dir "-green")
       ] [
         let demand-N cars-waiting-N
         let demand-S cars-waiting-S
@@ -651,7 +676,7 @@ to spawn-vehicles
       ]
       
       let spawn-patch patch spawn-x spawn-y
-      if spawn-patch != nobody and not any? cars-on spawn-patch [
+      if spawn-patch != nobody and not any? cars with [distancexy spawn-x spawn-y < 2] [
         ask spawn-patch [
           sprout-cars 1 [
             set shape "car"
@@ -663,6 +688,7 @@ to spawn-vehicles
             set is-emergency? false
             set waiting-time 0
             set patience (150 + random 250)
+            set overtaking? false
             set color one-of [blue brown]
             
             if emergency-vehicles? and random 100 < 2 [
@@ -731,6 +757,43 @@ to perceive-and-move
     ]
   ]
   
+  ;; 1.5 EV Overtaking Logic
+  if is-emergency? and not overtaking? and entering? [
+     let cars-ahead cars with [current-road = [current-road] of myself and heading = [heading] of myself]
+     if count cars-ahead in-cone 10 30 >= 5 [
+       let target-x xcor
+       let target-y ycor
+       if current-road = "N" [ set target-x -1 ]
+       if current-road = "S" [ set target-x 2 ]
+       if current-road = "E" [ set target-y 2 ]
+       if current-road = "W" [ set target-y -1 ]
+       
+       if not any? cars with [distancexy target-x target-y < 2] [
+         set overtaking? true
+         set xcor target-x
+         set ycor target-y
+       ]
+     ]
+  ]
+  
+  ;; 1.6 Merge back after overtaking
+  if overtaking? and not entering? and not intersection? [
+     let target-x xcor
+     let target-y ycor
+     if current-road = "N" and xcor = -1 [ set target-x 0 ]
+     if current-road = "S" and xcor = 2 [ set target-x 1 ]
+     if current-road = "E" and ycor = 2 [ set target-y 1 ]
+     if current-road = "W" and ycor = -1 [ set target-y 0 ]
+     
+     if target-x != xcor or target-y != ycor [
+       if not any? cars with [distancexy target-x target-y < 2] [
+         set xcor target-x
+         set ycor target-y
+         set overtaking? false
+       ]
+     ]
+  ]
+  
   ;; 2. Intersection Turning Logic
   if [intersection?] of patch-here [
     let p patch-here
@@ -753,17 +816,24 @@ to perceive-and-move
     ]
   ]
   
-  ;; 3. Determine target patch & Collision Avoidance
-  let target-patch patch-ahead 1
-  if target-patch != nobody [
-    if any? cars-on target-patch [
+  ;; 3. Smooth Braking & Collision Avoidance
+  let cars-ahead other cars with [current-road = [current-road] of myself and heading = [heading] of myself]
+  let closest-car min-one-of (cars-ahead in-cone 3 30) [distance myself]
+  let braked? false
+  if closest-car != nobody [
+    let dist distance closest-car
+    if dist < 1.7 [
       set speed 0
       stop
+    ]
+    if speed > (dist - 1.7) [
+      set speed (dist - 1.7)
+      set braked? true
     ]
   ]
   
   ;; 4. Accelerate and Move
-  if speed < max-speed [ set speed speed + 0.2 ]
+  if not braked? and speed < max-speed [ set speed speed + 0.2 ]
   fd speed
   
   ;; 5. Remove cars at boundary
@@ -796,7 +866,7 @@ end
     <slider x="40" step="1" y="150" max="30" width="250" display="min-green" height="50" min="5" direction="Horizontal" default="10.0" variable="min-green"></slider>
     <slider x="40" step="1" y="205" max="120" width="250" display="max-green" height="50" min="30" direction="Horizontal" default="60.0" variable="max-green"></slider>
     <slider x="40" step="1" y="260" max="10" width="250" display="switching-threshold" height="50" min="1" direction="Horizontal" default="3.0" variable="switching-threshold"></slider>
-    <chooser x="40" y="340" height="60" variable="control-mode" current="2" width="250" display="control-mode">
+    <chooser x="40" y="340" height="60" variable="control-mode" current="1" width="250" display="control-mode">
       <choice type="string" value="Fixed"></choice>
       <choice type="string" value="Adaptive"></choice>
       <choice type="string" value="Coordinated"></choice>
@@ -808,26 +878,8 @@ end
     <button x="40" y="575" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (South)">press-pedestrian-button-south</button>
     <button x="40" y="625" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (North)">press-pedestrian-button-north</button>
     <button x="40" y="675" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="205" display="Pedestrian Button (East)">press-pedestrian-button-east</button>
-    <monitor x="40" precision="17" y="730" height="60" fontSize="11" width="205">average-waiting-time</monitor>
-    <monitor x="40" precision="17" y="795" height="60" fontSize="11" width="205" display="average-ev-waiting-time">average-ev-waiting-time</monitor>
-    <monitor x="40" precision="17" y="860" height="60" fontSize="11" width="205" display="avg-pedestrian-waiting-time">average-pedestrian-waiting-time</monitor>
-    <plot x="310" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg Car Wait Time">
-      <setup></setup>
-      <update></update>
-      <pen interval="1.0" mode="0" display="Cars" color="-16776961" legend="true">
-        <setup></setup>
-        <update>plot average-waiting-time</update>
-      </pen>
-    </plot>
-    <plot x="545" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg EV Wait Time">
-      <setup></setup>
-      <update></update>
-      <pen interval="1.0" mode="0" display="EVs" color="-65536" legend="true">
-        <setup></setup>
-        <update>plot average-ev-waiting-time</update>
-      </pen>
-    </plot>
-    <plot x="780" autoPlotX="true" yMax="10.0" autoPlotY="true" y="755" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="230" display="Avg Ped Wait Time">
+    <monitor x="40" precision="17" y="770" height="60" fontSize="11" width="205">average-waiting-time</monitor>
+    <plot x="40" autoPlotX="true" yMax="10.0" autoPlotY="true" y="1340" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="985" display="Avg Ped Wait Time">
       <setup></setup>
       <update></update>
       <pen interval="1.0" mode="0" display="Peds" color="-16777216" legend="true">
@@ -835,6 +887,24 @@ end
         <update>plot average-pedestrian-waiting-time</update>
       </pen>
     </plot>
+    <plot x="40" autoPlotX="true" yMax="10.0" autoPlotY="true" y="1090" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="985" display="Avg EV Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="EVs" color="-65536" legend="true">
+        <setup></setup>
+        <update>plot average-ev-waiting-time</update>
+      </pen>
+    </plot>
+    <plot x="40" autoPlotX="true" yMax="10.0" autoPlotY="true" y="840" xMin="0.0" height="165" legend="false" xMax="100.0" yMin="0.0" width="985" display="Avg Car Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Cars" color="-16776961" legend="true">
+        <setup></setup>
+        <update>plot average-waiting-time</update>
+      </pen>
+    </plot>
+    <monitor x="40" precision="17" y="1025" height="60" fontSize="11" width="205" display="average-ev-waiting-time">average-ev-waiting-time</monitor>
+    <monitor x="40" precision="17" y="1275" height="60" fontSize="11" width="205" display="avg-pedestrian-waiting-time">average-pedestrian-waiting-time</monitor>
   </widgets>
   <info>## WHAT IS IT?
 
